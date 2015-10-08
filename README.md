@@ -33,6 +33,7 @@ rms get-md5 <link-name> [<link-name, ...]           return md5sum hash values of
 ## Misc
 rms repository pathname is simply exported in the environment.
 
+```
 <rms-path>
 |_<.rms>
   |_<git-bare>
@@ -54,6 +55,7 @@ rms repository pathname is simply exported in the environment.
     |_File_B -> <local>/ecb6d3479ac3823f1da7f314d871989b*
     |_B -> <local>/ecb6d3479ac3823f1da7f314d871989b*
     |_git_File_C -> <git>/<521ae885a8ecfe35c07e1cc7cba92adf>/521ae885a8ecfe35c07e1cc7cba92adf*
+```
 
 when adding a file automatically a description file is added which logs dates, commits and changes. (md5sum.desc)
 
