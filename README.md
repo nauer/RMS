@@ -16,6 +16,7 @@ version control with th -f option to force the overwrite.
 
 
 ## Function Calls
+```
 rms add <file-name> [<link-name> <g>]               link name is obligate if filename is unique under all link names
 rms checkout <link-name> [link-name, ...]
 rms update <link-name> <file-name> <commit> [<f>]
@@ -29,7 +30,7 @@ rms rm <link-name>                                  only possible if all other l
 rms list [link-name]                                list all files with its linked names. If link-name is specified only list link-names of this file
 rms share <path> [<link-name>, ...]                 create a copy of the repository or if link-names are given create a new repository with given files
 rms get-md5 <link-name> [<link-name, ...]           return md5sum hash values of the files
-
+```
 ## Misc
 rms repository pathname is simply exported in the environment.
 
