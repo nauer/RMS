@@ -19,7 +19,9 @@ import magic
 import zlib # gzip gives different checksums repeating compression. Use zlib instead - gzip header is missing see http://unix.stackexchange.com/questions/22834/how-to-uncompress-zlib-data-in-unix
 import hashlib
 import shutil
+import json
 
+from datetime import date
 from argparse import ArgumentParser
 from argparse import Action
 from argparse import RawDescriptionHelpFormatter
@@ -28,7 +30,7 @@ from argparse import FileType
 __all__ = []
 __version__ = '0.1'
 __date__ = '2016-04-11'
-__updated__ = '2016-04-11'
+__updated__ = '2016-04-13'
 
 DEBUG = 1
 TESTRUN = 0
@@ -96,46 +98,35 @@ USAGE
         parser_init         = subparsers.add_parser('init', help='Create a new repository')
         parser_add          = subparsers.add_parser('add', help='Add a new file to the repository')
         parser_get          = subparsers.add_parser('get', help='Get file from repository')
+        parser_tag          = subparsers.add_parser('tag', help='Get or set tags')
         parser_checkout     = subparsers.add_parser('checkout', help='checkout help')
         parser_update       = subparsers.add_parser('update', help='update help')
-        parser_edit_desc    = subparsers.add_parser('edit-desc', help='edit-desc help')
+        parser_desc         = subparsers.add_parser('desc', help='Set and get description')
+        parser_desc_group   = parser_desc.add_mutually_exclusive_group()
 
-        parser_init.add_argument("init_path", action=EnvDefault, envvar='HOME', help='Path to the new repository parent. Default = "$HOME"')
+        parser_init.add_argument("path",action=EnvDefault, envvar='HOME',
+                                 help='Path to the new repository parent. Default = "$HOME"')
         parser_init.set_defaults(func=init)
 
-        parser_add.add_argument('add_file', type=str, help='Add file to the repository')
+        parser_add.add_argument('file', type=str, help='Add file to the repository')
         parser_add.set_defaults(func=add)
 
-        parser_get.add_argument('get_file', type=str, help='Get file from the repository')
+        parser_get.add_argument('file', type=str, help='Get file from the repository')
+        parser_get.add_argument('target', type=str, help='The target directory where the file should be copied to')
         parser_get.set_defaults(func=get)
+
+        parser_tag.add_argument('file', type=str, help='File of interest.')
+        parser_tag.add_argument('-n', '--new-tag', type=str, required=False, help='Add new tag for file')
+        parser_tag.set_defaults(func=tag)
 
         parser_checkout.set_defaults(func=checkout)
 
         parser_update.set_defaults(func=update)
 
-        parser_edit_desc.set_defaults(func=edit_desc)
-
-        #group = parser.add_mutually_exclusive_group()
-        #group2 = parser.add_mutually_exclusive_group()
-        #group3 = parser.add_mutually_exclusive_group()
-        #group.add_argument('-e', '--pattern', help='Single regular expression pattern to search for', type=str)
-        #group.add_argument('-l', '--pattern-list', nargs='?',
-        #                   help='Path to file with multiple patterns. One pattern per line', type=FileType('r'))
-        # parser.add_argument('-V', '--version', action='version', version=program_version_message)
-        # parser.add_argument('-v', '--invert-match', action='store_true',
-        #                    help='Invert the sense of matching, to select non-matching lines.')
-        #parser.add_argument('-t', '--fixed-strings', action='store_true',
-        #                    help='Interpret PATTERN as a list of fixed strings, separated by newlines, any of which is to be matched.')
-        #parser.add_argument('file', nargs='+', type=FileType('r'), default='-',
-        #                    help="File from type fasta. Leave empty or use '-' to read from Stdin or pipe.")
-        #parser.add_argument('-p', '--header-pattern',  default='^>', type=str,
-        #                    help='Use this pattern to identify header line.')
-        #parser.add_argument('-d', '--rm-duplicates', action='store_true',
-        #                    help='Remove sequences with duplicate header lines. Hold only first founded sequence.')
-        #group2.add_argument('-s', '--summary', action='store_true',
-        #                    help='Returns instead of the normal output only the header and a summary of the sequence.')
-        #group2.add_argument('-n', '--summary-no-header', action='store_true',
-        #                    help='Same like summary without starting header line.')
+        parser_desc.add_argument('file', type=str, help='File of interest')
+        parser_desc_group.add_argument('-g', '--get', nargs="+", type=str, help='Get description by keys')
+        parser_desc_group.add_argument('-s', '--set', nargs="+", type=str, help='Set description by keys ("key:desc")')
+        parser_desc.set_defaults(func=desc)
 
         # Process arguments
         args = parser.parse_args()
@@ -176,16 +167,82 @@ def _get_repo_hashes(repo):
     return os.listdir(os.path.join(repo, "data"))
 
 
+def _get_repo_tags(repo):
+    return os.listdir(os.path.join(repo, "tags"))
+
+
+def _get_markdown(json, tag):
+    print(json)
+    aliases = ''
+
+    if len(json['tags']) > 1:
+        aliases = '## Aliases:\n'
+
+        for alias in json['tags']:
+            if alias != tag:
+                aliases += "+ {}\n".format(alias)
+
+    markdown = '''# Description File {tag}
+
+## In Repository since {date}
+
+{aliases}
+    '''.format(tag=tag, date=json['repo_date'], aliases=aliases)
+
+    return markdown
+
+def _get_tags_inodes(repo):
+    tags = os.listdir(os.path.join(repo, "tags"))
+    inodes = dict()
+
+    for tag in tags:
+        if os.lstat(os.path.join(repo, "tags", tag)).st_ino in inodes.keys():
+            inodes[os.lstat(os.path.join(repo, "tags", tag)).st_ino].append(tag)
+        else:
+            inodes[os.lstat(os.path.join(repo, "tags", tag)).st_ino] = [tag]
+
+    return inodes
+
+def _get_data_tag(repo, tag):
+    try:
+        print(os.path.join(repo, "tags", tag))
+        inode = os.lstat(os.path.join(repo, "tags", tag)).st_ino
+    except:
+        exit("Tag does not exist")
+
+    data = os.listdir(os.path.join(repo, "data"))
+
+    inodes = dict()
+
+    for d in data:
+        inodes[os.lstat(os.path.join(repo, "data", d)).st_ino] = d
+
+    return inodes[inode]
+
+def _get_json(repo, tag):
+    sha1 = _get_data_tag(repo, tag)
+    json_data = ''
+    try:
+        f_r = open(os.path.join(repo, "desc", sha1), 'r+')
+
+        json_data = json.loads(f_r.read())
+    except:
+        json_data = {"repo_date": str(date.today()), "tags": []}
+
+    return json_data
+
 def init(args):
     try:
-        os.makedirs(os.path.join(args.init_path,".rms", "data"))
+        os.makedirs(os.path.join(args.init_path, ".rms", "data"))
+        os.makedirs(os.path.join(args.init_path, ".rms", "tags"))
+        os.makedirs(os.path.join(args.init_path, ".rms", "desc"))
         print("Create new repository at {}".format(os.path.join(args.init_path,".rms")))
         print("Add this RMS={} to your .profile file".format(os.path.join(args.init_path, ".rms")))
     except FileExistsError:
-        print("Repository {} already exists".format(os.path.join(args.init_path, ".rms")))
-        print("Add this RMS={} to your .profile file".format(os.path.join(args.init_path, ".rms")))
+        print("Repository {} already exists".format(os.path.join(args.init_path, ".rms")), file=sys.stderr)
+        print("Add this RMS={} to your .profile file".format(os.path.join(args.init_path, ".rms")), file=sys.stderr)
     except:
-        print("Unexpected error: {}".format(sys.exc_info()[0]))
+        print("Unexpected error: {}".format(sys.exc_info()[0]), file=sys.stderr)
         raise
 
 
@@ -195,9 +252,11 @@ def add(args):
     if repo is None:
         sys.exit("RMS is not set! Run 'rms init' before to create a rms repository.")
 
-    mime = magic.from_file(args.add_file, mime=True)
+    mime = magic.from_file(args.file, mime=True)
 
     repo_hashes = _get_repo_hashes(repo)
+
+    filename = os.path.basename(args.file)
 
     # check mime type if text
     if b"text" in mime:
@@ -205,7 +264,7 @@ def add(args):
 
         compressed = None
 
-        with open(args.add_file, "rb") as f:
+        with open(args.file, "rb") as f:
             compressed = zlib.compress(f.read(), 9)
 
         # get sha1 sum
@@ -220,61 +279,133 @@ def add(args):
                 f.write(compressed)
     else:
         # get sha1 sum
-        sha1 = _get_file_sha1(args.add_file)
+        sha1 = _get_file_sha1(args.file)
 
         # check if file is still in the repo
         if sha1 in repo_hashes:
             print("File is already in the repoistory. Add filename as tag.")
         else:
-            shutil.copy2(args.add_file, os.path.join(repo, "data", sha1))
+            shutil.copy2(args.file, os.path.join(repo, "data", sha1))
 
     # add hardlink
-    os.link(os.path.join(repo, "data", sha1), os.path.join(repo, "data", #basename args.add_file))
+    try:
+        os.link(os.path.join(repo, "data", sha1), os.path.join(repo, "tags", os.path.basename(args.file)))
+
+        # update json_desc
+        json_data = _get_json(repo, filename)
+        json_data['tags'].append(filename)
+
+        with open(os.path.join(repo, "desc", sha1), 'w') as f_w:
+            json.dump(json_data, f_w)
+
+    except FileExistsError:
+        pass # This error is okay
+    except:
+        print("Unexpected error: {}".format(sys.exc_info()[0]), file=sys.stderr)
+        raise
 
 
-def get():
-    pass
+def get(args):
+    repo = _get_repo_path()
 
-def edit_desc(args):
-    pass
+    tags = _get_repo_tags(repo)
+
+    filename = os.path.basename(args.file)
+
+    if os.path.isfile(os.path.expanduser(args.target)):
+        sys.exit("File already exists at {}".format(os.path.join(os.path.expanduser(args.target), filename)))
+
+    if filename in tags:
+        src = os.path.join(repo, "tags", filename)
+        dst = os.path.expanduser(args.target)
+        try:
+            # if compressed decompress it
+            if magic.from_file(src, mime=True) == b'application/octet-stream':
+                with open(src, 'rb') as f_r:
+                    with open(dst, 'wb') as f_w:
+                        f_w.write(zlib.decompress(f_r.read()))
+            else:
+                shutil.copy2(src, dst)
+        except PermissionError:
+            print("You have no write permissions at {}".format(os.path.expanduser(args.target)), file=sys.stderr)
+        except:
+            print("Unexpected error: {}".format(sys.exc_info()[0]), file=sys.stderr)
+            raise
+
+
+def tag(args):
+    repo = _get_repo_path()
+
+    tags = _get_repo_tags(repo)
+
+    filename = os.path.basename(args.file)
+
+    sha1 = _get_data_tag(repo, filename)
+
+    if filename in tags:
+        if args.new_tag:
+            try:
+                os.link(os.path.join(repo, "tags", filename),
+                        os.path.join(repo, "tags", os.path.basename(args.new_tag)))
+
+                json_data = _get_json(repo, filename)
+                json_data['tags'].append(args.new_tag)
+
+                with open(os.path.join(repo, "desc", sha1), 'w') as f_w:
+                    json.dump(json_data, f_w)
+
+            except FileExistsError:
+                print("Tag is already set")  # This error is okay
+            except:
+                sys.exit("Unexpected error: {}".format(sys.exc_info()[0]))
+
+        inodes = _get_tags_inodes(repo)
+
+        for tag in inodes[os.lstat(os.path.join(repo, "tags", filename)).st_ino]:
+            print(tag)
+
+
+def desc(args):
+    repo = _get_repo_path()
+
+    tags = _get_repo_tags(repo)
+
+    filename = os.path.basename(args.file)
+    print(_get_data_tag(repo, filename))
+    if args.get is None and  args.set is None:
+        with open(os.path.join(repo, "desc", _get_data_tag(repo, filename)), 'r') as f_r:
+            json_data = json.loads(f_r.read())
+
+        print(_get_markdown(json_data, filename))
+
 
 def update(args):
     pass
 
+
 def checkout(args):
     pass
 
+
 if __name__ == "__main__":
     if DEBUG:
-        sys.argv.append("add")
-        sys.argv.append("../test/app")
-
         # sys.argv.append("init")
-        # sys.argv.append("-x")
-        # sys.argv.append("79")
-        # sys.argv.append("-O")
-        # sys.argv.append("test.fna")
-        # sys.argv.append("../test/pattern_list")
-        # sys.argv.append("-l")
-        # sys.argv.append("../test/list")
-        # sys.argv.append("--")
-        # sys.argv.append("tata")
-        # sys.argv.append("-z")
-        # sys.argv.append("3")
-        # sys.argv.append("-m")
-        # sys.argv.append("24")
-        # sys.argv.append("-F")
-        # sys.argv.append("250")
-        # sys.argv.append("-L")
-        # sys.argv.append("52")
-        # sys.argv.append("-e")
-        # sys.argv.append(".*")
-        # sys.argv.append("([^\t]*)\tgi\|(\d+).*?([^|]+)\|$")
-        # sys.argv.append("/home/nauer/Projects/Proteomics/Scripts/snakemake/proto/test/output1.fna")
-        # sys.argv.append("/home/nauer/Projects/Proteomics/Scripts/snakemake/proto/test/output2.fna")
-        # sys.argv.append("/home/nauer/Projects/Proteomics/Scripts/snakemake/proto/test/output3.fna")
-        # sys.argv.append("/home/nauer/Projects/Proteomics/Scripts/snakemake/proto/test/output6.fna")
-        # sys.argv.append("../test/test_dup.fa")
+
+        #sys.argv.append("add")
+        #sys.argv.append("../test/text")
+
+        # sys.argv.append("get")
+        # sys.argv.append("text")
+        # sys.argv.append("~/test2")
+
+        #sys.argv.append("tag")
+        #sys.argv.append("text2")
+        #sys.argv.append("-n")
+        #sys.argv.append("text6")
+
+        sys.argv.append("desc")
+        sys.argv.append("text")
+        # sys.argv.append("-h")
 
     if TESTRUN:
         import doctest
