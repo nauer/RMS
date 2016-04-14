@@ -20,21 +20,31 @@ import zlib # gzip gives different checksums repeating compression. Use zlib ins
 import hashlib
 import shutil
 import json
+import pdfkit
+import collections
 
 from datetime import date
 from argparse import ArgumentParser
 from argparse import Action
 from argparse import RawDescriptionHelpFormatter
+from enum import Enum
+from markdown import markdown
 from argparse import FileType
 
 __all__ = []
-__version__ = '0.1'
+__version__ = '0.2'
 __date__ = '2016-04-11'
-__updated__ = '2016-04-13'
+__updated__ = '2016-04-14'
 
 DEBUG = 1
 TESTRUN = 0
 PROFILE = 0
+
+class Format(Enum):
+    markdown = 1
+    html5 = 2
+    pdf = 3
+    json = 4
 
 class EnvDefault(Action):
     def __init__(self, envvar, required=True, default=None, **kwargs):
@@ -99,8 +109,6 @@ USAGE
         parser_add          = subparsers.add_parser('add', help='Add a new file to the repository')
         parser_get          = subparsers.add_parser('get', help='Get file from repository')
         parser_tag          = subparsers.add_parser('tag', help='Get or set tags')
-        parser_checkout     = subparsers.add_parser('checkout', help='checkout help')
-        parser_update       = subparsers.add_parser('update', help='update help')
         parser_desc         = subparsers.add_parser('desc', help='Set and get description')
         parser_desc_group   = parser_desc.add_mutually_exclusive_group()
 
@@ -119,13 +127,16 @@ USAGE
         parser_tag.add_argument('-n', '--new-tag', type=str, required=False, help='Add new tag for file')
         parser_tag.set_defaults(func=tag)
 
-        parser_checkout.set_defaults(func=checkout)
-
-        parser_update.set_defaults(func=update)
-
         parser_desc.add_argument('file', type=str, help='File of interest')
-        parser_desc_group.add_argument('-g', '--get', nargs="+", type=str, help='Get description by keys')
-        parser_desc_group.add_argument('-s', '--set', nargs="+", type=str, help='Set description by keys ("key:desc")')
+        parser_desc.add_argument('-f', '--format', choices=[f.name for f in Format], type=str, default=Format(3).name,
+                                 help="Set the output format. Default is 'pdf'")
+        parser_desc.add_argument('-o', '--output', type=FileType('wb'),
+                                 help="Set the output format. Default is 'pdf'")
+        parser_desc_group.add_argument('-g', '--get', type=str, help='Get description by keys')
+        parser_desc_group.add_argument('-s', '--set', type=str, help='Set description by keys ("key:desc")')
+        parser_desc_group.add_argument('-k', '--keys', action='store_true', help='Set description by keys ("key:desc")')
+        parser_desc_group.add_argument('-c', '--clear', action='store_true',
+                                       help='Delete all sections from description file')
         parser_desc.set_defaults(func=desc)
 
         # Process arguments
@@ -147,6 +158,21 @@ USAGE
         sys.stderr.write(program_name + ": " + repr(e) + "\n")
         sys.stderr.write(indent + "  for help use --help")
         return 2
+
+
+# Solution for nested dict update
+# http://stackoverflow.com/questions/3232943/update-value-of-a-nested-dictionary-of-varying-depth/3233356#3233356
+def _dict_update(d, u):
+    for k, v in u.items():
+        if isinstance(d, collections.Mapping):
+            if isinstance(v, collections.Mapping):
+                r = _dict_update(d.get(k, {}), v)
+                d[k] = r
+            else:
+                d[k] = u[k]
+        else:
+            d = {k: u[k]}
+    return d
 
 
 def _get_repo_path():
@@ -172,7 +198,6 @@ def _get_repo_tags(repo):
 
 
 def _get_markdown(json, tag):
-    print(json)
     aliases = ''
 
     if len(json['tags']) > 1:
@@ -182,14 +207,30 @@ def _get_markdown(json, tag):
             if alias != tag:
                 aliases += "+ {}\n".format(alias)
 
-    markdown = '''# Description File {tag}
+    markd = '''# Description File for *{tag}*
 
-## In Repository since {date}
+## In repository since *{date}*
 
 {aliases}
-    '''.format(tag=tag, date=json['repo_date'], aliases=aliases)
+'''.format(tag=tag, date=json['repo_date'], aliases=aliases)
 
-    return markdown
+    for key in json:
+        if key == 'tags' or key == 'repo_date':
+            continue
+        if isinstance(json[key],list):
+            section = "##{key}\n\n".format(key=key)
+
+            for l in json[key]:
+                section += "+ {val}\n".format(val=l)
+
+            markd += section + "\n"
+        elif isinstance(json[key], dict):
+            pass
+        else:
+           markd += "##{key}\n{val}\n\n".format(key=key, val=json[key])
+
+    return markd
+
 
 def _get_tags_inodes(repo):
     tags = os.listdir(os.path.join(repo, "tags"))
@@ -203,9 +244,9 @@ def _get_tags_inodes(repo):
 
     return inodes
 
+
 def _get_data_tag(repo, tag):
     try:
-        print(os.path.join(repo, "tags", tag))
         inode = os.lstat(os.path.join(repo, "tags", tag)).st_ino
     except:
         exit("Tag does not exist")
@@ -219,6 +260,7 @@ def _get_data_tag(repo, tag):
 
     return inodes[inode]
 
+
 def _get_json(repo, tag):
     sha1 = _get_data_tag(repo, tag)
     json_data = ''
@@ -230,6 +272,7 @@ def _get_json(repo, tag):
         json_data = {"repo_date": str(date.today()), "tags": []}
 
     return json_data
+
 
 def init(args):
     try:
@@ -368,23 +411,62 @@ def tag(args):
 def desc(args):
     repo = _get_repo_path()
 
-    tags = _get_repo_tags(repo)
-
     filename = os.path.basename(args.file)
-    print(_get_data_tag(repo, filename))
-    if args.get is None and  args.set is None:
-        with open(os.path.join(repo, "desc", _get_data_tag(repo, filename)), 'r') as f_r:
-            json_data = json.loads(f_r.read())
 
-        print(_get_markdown(json_data, filename))
+    sha1 = _get_data_tag(repo, filename)
+
+    if args.output:
+        f = args.output
+    else:
+        f = sys.stdout.buffer
+
+    with open(os.path.join(repo, "desc", _get_data_tag(repo, filename)), 'r') as f_r:
+        json_data = json.loads(f_r.read())
+
+    if args.keys:
+        for key in json_data:
+            print(key)
+    elif args.clear:
+        json_data_new = {'tags':[],'repo_date':json_data['repo_date']}
+        with open(os.path.join(repo, "desc", sha1), 'w') as f_w:
+            json.dump(json_data_new, f_w)
+    elif args.get is None and args.set is None:
+        if args.format == Format(1).name: # markdown
+            f.write(_get_markdown(json_data, filename).encode('utf-8'))
+        elif args.format == Format(2).name: # html5
+            header = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>{}</title></head><body>'.format(filename)
+            footer = '</body></html>'
+            f.write((header + markdown(_get_markdown(json_data, filename), output_format='html5') + footer).encode('utf-8'))
+        elif args.format == Format(3).name: # pdf
+            options = {
+                'page-size': 'A4',
+                'encoding': "UTF-8"
+            }
+            f.write(pdfkit.from_string(markdown(_get_markdown(json_data, filename), output_format='html4'), False, options=options))
+        elif args.format == Format(4).name: # json
+            f.write(json.dumps(json_data,sort_keys=True, indent=2).encode('utf-8'))
+        else:
+            print("Unknown output format: {}".format(args.format), file=sys.stderr)
+    elif args.get:
+        if args.get in json_data:
+            print(json_data[args.get])
+        else:
+            print("'{}' is not defined yet. Use 'rms get --keys {}' to see all available keys".format(args.get, args.file))
+    elif args.set:
+        try:
+            with open(args.set, "r") as f_r:
+                json_new = json.loads(f_r.read())
+        except:
+            try:
+                json_new = json.loads(args.set)
+            except:
+                sys.exit("{} is not a json file nor a json string".format(args.set))
 
 
-def update(args):
-    pass
+        _dict_update(json_data, json_new)
 
-
-def checkout(args):
-    pass
+        with open(os.path.join(repo, "desc", sha1), 'w') as f_w:
+            json.dump(json_data, f_w)
 
 
 if __name__ == "__main__":
@@ -405,6 +487,16 @@ if __name__ == "__main__":
 
         sys.argv.append("desc")
         sys.argv.append("text")
+        #sys.argv.append("-g")
+        #sys.argv.append("tags")
+        sys.argv.append("-f")
+        sys.argv.append("html5")
+        #sys.argv.append("-o")
+        #sys.argv.append("/home/nauer/test.pdf")
+        #sys.argv.append("-k")
+        #sys.argv.append("--set")
+        #sys.argv.append('../test/test.json')
+
         # sys.argv.append("-h")
 
     if TESTRUN:

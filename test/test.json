@@ -1,0 +1,6 @@
+{
+	"CMD:":"Build by this command:\n\n```\ndocker build -t nauer/rms .\n```\n\nSehr schön. Umlaute funktionieren auch.",
+	"Dependencies:":["libA","libB","und besonders **libC**"],
+	"Organism:":"*Cricetulus griseus*"
+
+}
