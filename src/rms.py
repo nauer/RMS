@@ -32,19 +32,21 @@ from markdown import markdown
 from argparse import FileType
 
 __all__ = []
-__version__ = '0.2'
+__version__ = '0.3'
 __date__ = '2016-04-11'
-__updated__ = '2016-04-14'
+__updated__ = '2016-04-15'
 
-DEBUG = 1
+DEBUG = 0
 TESTRUN = 0
 PROFILE = 0
+
 
 class Format(Enum):
     markdown = 1
     html5 = 2
     pdf = 3
     json = 4
+
 
 class EnvDefault(Action):
     def __init__(self, envvar, required=True, default=None, **kwargs):
@@ -107,6 +109,7 @@ USAGE
         subparsers = parser.add_subparsers(help='sub-command help')
         parser_init         = subparsers.add_parser('init', help='Create a new repository')
         parser_add          = subparsers.add_parser('add', help='Add a new file to the repository')
+        parser_rm           = subparsers.add_parser('rm', help='Remove a tags or files from the repository')
         parser_get          = subparsers.add_parser('get', help='Get file from repository')
         parser_tag          = subparsers.add_parser('tag', help='Get or set tags')
         parser_desc         = subparsers.add_parser('desc', help='Set and get description')
@@ -117,7 +120,11 @@ USAGE
         parser_init.set_defaults(func=init)
 
         parser_add.add_argument('file', type=str, help='Add file to the repository')
+        parser_add.add_argument('description', type=str, help='File description')
         parser_add.set_defaults(func=add)
+
+        parser_rm.add_argument('file', type=str, help='Remove tag from the repository. If the last tag of a file was removed also the file itself with its description file will be removed.')
+        parser_rm.set_defaults(func=rm)
 
         parser_get.add_argument('file', type=str, help='Get file from the repository')
         parser_get.add_argument('target', type=str, help='The target directory where the file should be copied to')
@@ -163,6 +170,12 @@ USAGE
 # Solution for nested dict update
 # http://stackoverflow.com/questions/3232943/update-value-of-a-nested-dictionary-of-varying-depth/3233356#3233356
 def _dict_update(d, u):
+    """
+    Update a dictionary and it nested dictionaries
+    :param d: dict
+    :param u: dict
+    :return: dict
+    """
     for k, v in u.items():
         if isinstance(d, collections.Mapping):
             if isinstance(v, collections.Mapping):
@@ -176,35 +189,63 @@ def _dict_update(d, u):
 
 
 def _get_repo_path():
+    """
+    Read out and return the RMS environment variable
+    :return: str
+    """
     if "RMS" in os.environ:
         return os.environ["RMS"]
 
 
-def _get_file_sha1(path):
-    with open(path, 'rb') as f:
+def _get_file_sha1(file):
+    """
+    Calculates and return the sha1sum from a file
+    :param file: str
+    :return: str
+    """
+    with open(file, 'rb') as f:
         return hashlib.sha1(f.read()).hexdigest()
 
 
 def _get_string_sha1(string):
+    """
+    Calculates and return the sha1sum from a string
+    :param string: str
+    :return: str
+    """
     return hashlib.sha1(string).hexdigest()
 
 
-def _get_repo_hashes(repo):
-    return os.listdir(os.path.join(repo, "data"))
+def _get_repo_hashes():
+    """
+    Returns a list of all hashed unique files in the repository
+    :return: list
+    """
+    return os.listdir(os.path.join(_get_repo_path(), "data"))
 
 
-def _get_repo_tags(repo):
-    return os.listdir(os.path.join(repo, "tags"))
+def _get_repo_tags():
+    """
+    Returns a list of all tag files in the repository
+    :return: list
+    """
+    return os.listdir(os.path.join(_get_repo_path(), "tags"))
 
 
-def _get_markdown(json, tag):
+def _get_markdown(data_json, tagname):
+    """
+    Create markdown string from json object
+    :param data_json: dict
+    :param tagname: str
+    :return: str
+    """
     aliases = ''
 
-    if len(json['tags']) > 1:
+    if len(data_json['tags']) > 1:
         aliases = '## Aliases:\n'
 
-        for alias in json['tags']:
-            if alias != tag:
+        for alias in data_json['tags']:
+            if alias != tagname:
                 aliases += "+ {}\n".format(alias)
 
     markd = '''# Description File for *{tag}*
@@ -212,28 +253,33 @@ def _get_markdown(json, tag):
 ## In repository since *{date}*
 
 {aliases}
-'''.format(tag=tag, date=json['repo_date'], aliases=aliases)
+'''.format(tag=tagname, date=data_json['repo_date'], aliases=aliases, description=data_json['Description'])
 
-    for key in json:
+    for key in data_json:
         if key == 'tags' or key == 'repo_date':
             continue
-        if isinstance(json[key],list):
+        if isinstance(data_json[key], list):
             section = "##{key}\n\n".format(key=key)
 
-            for l in json[key]:
+            for l in data_json[key]:
                 section += "+ {val}\n".format(val=l)
 
             markd += section + "\n"
-        elif isinstance(json[key], dict):
+        elif isinstance(data_json[key], dict):
             pass
         else:
-           markd += "##{key}\n{val}\n\n".format(key=key, val=json[key])
+           markd += "##{key}\n{val}\n\n".format(key=key, val=data_json[key])
 
     return markd
 
 
-def _get_tags_inodes(repo):
-    tags = os.listdir(os.path.join(repo, "tags"))
+def _get_tags_inodes():
+    """
+    Creates a dictionary with inode ids associated with their tag file names
+    :return: dict
+    """
+    repo = _get_repo_path()
+    tags = _get_repo_tags()
     inodes = dict()
 
     for tag in tags:
@@ -245,24 +291,36 @@ def _get_tags_inodes(repo):
     return inodes
 
 
-def _get_data_tag(repo, tag):
+def _get_data_tag(tagname):
+    """
+    Returns the associated hash file name of the tag file
+    :param tagname: str
+    :return: str
+    """
+    repo = _get_repo_path()
     try:
-        inode = os.lstat(os.path.join(repo, "tags", tag)).st_ino
+        # Get inode from tag file
+        inode = os.lstat(os.path.join(repo, "tags", tagname)).st_ino
     except:
-        exit("Tag does not exist")
+        exit("Tag name '{}' does not exist".format(tagname))
 
-    data = os.listdir(os.path.join(repo, "data"))
+    data = _get_repo_hashes()
 
-    inodes = dict()
+    #inodes = dict()
 
     for d in data:
-        inodes[os.lstat(os.path.join(repo, "data", d)).st_ino] = d
+        if os.lstat(os.path.join(repo, "data", d)).st_ino == inode:
+            return d
 
-    return inodes[inode]
 
-
-def _get_json(repo, tag):
-    sha1 = _get_data_tag(repo, tag)
+def _get_json_by_tag(tagname):
+    """
+    Return existing description file or create it and return the json object
+    :param tagname: str
+    :return: dict
+    """
+    repo = _get_repo_path()
+    sha1 = _get_data_tag(tagname)
     json_data = ''
     try:
         f_r = open(os.path.join(repo, "desc", sha1), 'r+')
@@ -274,7 +332,31 @@ def _get_json(repo, tag):
     return json_data
 
 
+def _get_json_by_sha1(sha1):
+    """
+    Return existing description file or create it and return the json object
+    :param tagname: str
+    :return: dict
+    """
+    repo = _get_repo_path()
+    json_data = ''
+    try:
+        f_r = open(os.path.join(repo, "desc", sha1), 'r+')
+
+        json_data = json.loads(f_r.read())
+    except:
+        print("Unexpected error: {}".format(sys.exc_info()[0]), file=sys.stderr)
+        raise
+
+    return json_data
+
+
 def init(args):
+    """
+    Initiate a new repository
+    :param args: dict
+    :return: None
+    """
     try:
         os.makedirs(os.path.join(args.init_path, ".rms", "data"))
         os.makedirs(os.path.join(args.init_path, ".rms", "tags"))
@@ -290,14 +372,26 @@ def init(args):
 
 
 def add(args):
+    """
+    Add new files or tag names
+    :param args: dict
+    :return: None
+    """
     repo = _get_repo_path()
+    args.file = os.path.expanduser(args.file)
 
     if repo is None:
         sys.exit("RMS is not set! Run 'rms init' before to create a rms repository.")
 
-    mime = magic.from_file(args.file, mime=True)
+    try:
+        mime = magic.from_file(args.file, mime=True)
+    except FileNotFoundError:
+        sys.exit("No such File: '{}'".format(args.file))
+    except:
+        print("Unexpected error: {}".format(sys.exc_info()[0]), file=sys.stderr)
+        raise
 
-    repo_hashes = _get_repo_hashes(repo)
+    repo_hashes = _get_repo_hashes()
 
     filename = os.path.basename(args.file)
 
@@ -315,7 +409,7 @@ def add(args):
 
         # check if file is still in the repo
         if sha1 in repo_hashes:
-            print("File is already in the repoistory. Add filename as tag.")
+            print("File is already in the repository. Add file name as tag. Description is discarded. Use 'rms set {\"Description\":\"Message\"}' to update the description section.")
         else:
             # write zipped file
             with open(os.path.join(repo, "data", sha1), 'wb') as f:
@@ -326,7 +420,7 @@ def add(args):
 
         # check if file is still in the repo
         if sha1 in repo_hashes:
-            print("File is already in the repoistory. Add filename as tag.")
+            print("File is already in the repository. Add file name as tag. Description is discarded. Use 'rms set {\"Description\":\"Message\"}' to update the description section.")
         else:
             shutil.copy2(args.file, os.path.join(repo, "data", sha1))
 
@@ -335,9 +429,11 @@ def add(args):
         os.link(os.path.join(repo, "data", sha1), os.path.join(repo, "tags", os.path.basename(args.file)))
 
         # update json_desc
-        json_data = _get_json(repo, filename)
+        json_data = _get_json_by_tag(filename)
         json_data['tags'].append(filename)
+        json_data['Description'] = args.description
 
+        # Create json object
         with open(os.path.join(repo, "desc", sha1), 'w') as f_w:
             json.dump(json_data, f_w)
 
@@ -348,15 +444,60 @@ def add(args):
         raise
 
 
-def get(args):
+def rm(args):
+    """
+    Remove tag names or files from repository
+    :param args: dict
+    :return: None
+    """
     repo = _get_repo_path()
 
-    tags = _get_repo_tags(repo)
+    filename = args.file # No path allowed only filename
+
+    sha1 = _get_data_tag(filename)
+
+    try:
+        # Remove the tag
+        os.remove(os.path.join(repo, "tags", filename))
+    except FileExistsError:
+        sys.exit("Tag name '{}' does not exist".format(filename))
+    except:
+        print("Unexpected error: {}".format(sys.exc_info()[0]), file=sys.stderr)
+        raise
+
+    # Get inode count
+    if os.lstat(os.path.join(repo, "data", sha1)).st_nlink == 1:
+        print("No tags for '{}' do exist. Remove file and its description file from the repository".format(filename))
+        # Remove also the data file
+        os.remove(os.path.join(repo, "data", sha1))
+        os.remove(os.path.join(repo, "desc", sha1))
+    else:
+        json_data = _get_json_by_sha1(sha1)
+        json_data['tags'].remove(filename)
+
+        # Save json object
+        with open(os.path.join(repo, "desc", sha1), 'w') as f_w:
+            json.dump(json_data, f_w)
+
+        print("Following tags are still existing")
+        for tag in json_data['tags']:
+            print(tag)
+
+
+def get(args):
+    """
+    Copy file from the repository
+    :param args: dict
+    :return: None
+    """
+    repo = _get_repo_path()
+
+    tags = _get_repo_tags()
 
     filename = os.path.basename(args.file)
 
     if os.path.isfile(os.path.expanduser(args.target)):
-        sys.exit("File already exists at {}".format(os.path.join(os.path.expanduser(args.target), filename)))
+        sys.exit("File already exists at {}".format(os.path.join(os.path.expanduser(args.target))))
 
     if filename in tags:
         src = os.path.join(repo, "tags", filename)
@@ -377,13 +518,18 @@ def get(args):
 
 
 def tag(args):
+    """
+    Add new tag names for files in repository
+    :param args: dict
+    :return: None
+    """
     repo = _get_repo_path()
 
-    tags = _get_repo_tags(repo)
+    tags = _get_repo_tags()
 
     filename = os.path.basename(args.file)
 
-    sha1 = _get_data_tag(repo, filename)
+    sha1 = _get_data_tag(filename)
 
     if filename in tags:
         if args.new_tag:
@@ -391,7 +537,7 @@ def tag(args):
                 os.link(os.path.join(repo, "tags", filename),
                         os.path.join(repo, "tags", os.path.basename(args.new_tag)))
 
-                json_data = _get_json(repo, filename)
+                json_data = _get_json_by_tag(filename)
                 json_data['tags'].append(args.new_tag)
 
                 with open(os.path.join(repo, "desc", sha1), 'w') as f_w:
@@ -402,26 +548,33 @@ def tag(args):
             except:
                 sys.exit("Unexpected error: {}".format(sys.exc_info()[0]))
 
-        inodes = _get_tags_inodes(repo)
+        inodes = _get_tags_inodes()
 
+        print("Available tag names for file {}".format(filename))
         for tag in inodes[os.lstat(os.path.join(repo, "tags", filename)).st_ino]:
             print(tag)
 
 
 def desc(args):
+    """
+    Output the description file for a tag or file
+    :param args: dict
+    :return: None
+    """
     repo = _get_repo_path()
 
     filename = os.path.basename(args.file)
 
-    sha1 = _get_data_tag(repo, filename)
+    sha1 = _get_data_tag(filename)
 
     if args.output:
         f = args.output
     else:
         f = sys.stdout.buffer
 
-    with open(os.path.join(repo, "desc", _get_data_tag(repo, filename)), 'r') as f_r:
-        json_data = json.loads(f_r.read())
+    json_data = _get_json_by_tag(filename)
+    #with open(os.path.join(repo, "desc", _get_data_tag(filename)), 'r') as f_r:
+    #    json_data = json.loads(f_r.read())
 
     if args.keys:
         for key in json_data:
@@ -449,7 +602,11 @@ def desc(args):
             print("Unknown output format: {}".format(args.format), file=sys.stderr)
     elif args.get:
         if args.get in json_data:
-            print(json_data[args.get])
+            if isinstance(json_data[args.get], list):
+                for item in json_data[args.get]:
+                    print(item)
+            else:
+                print(json_data[args.get])
         else:
             print("'{}' is not defined yet. Use 'rms get --keys {}' to see all available keys".format(args.get, args.file))
     elif args.set:
@@ -474,27 +631,34 @@ if __name__ == "__main__":
         # sys.argv.append("init")
 
         #sys.argv.append("add")
-        #sys.argv.append("../test/text")
+        #sys.argv.append("../test/app")
+        #sys.argv.append("~/targets.ods")
+        #sys.argv.append("This file is a simple test file from the file text. It is only here to test rms functionality.")
 
-        # sys.argv.append("get")
-        # sys.argv.append("text")
-        # sys.argv.append("~/test2")
+        sys.argv.append("rm")
+        sys.argv.append(".bashrc")
+
+
+        #sys.argv.append("get")
+        #sys.argv.append("text")
+        #sys.argv.append("~/test2")
 
         #sys.argv.append("tag")
-        #sys.argv.append("text2")
+        #sys.argv.append("app")
         #sys.argv.append("-n")
-        #sys.argv.append("text6")
+        #sys.argv.append("cp4")
 
-        sys.argv.append("desc")
-        sys.argv.append("text")
+        #sys.argv.append("desc")
+        #sys.argv.append("app")
         #sys.argv.append("-g")
-        #sys.argv.append("tags")
-        sys.argv.append("-f")
-        sys.argv.append("html5")
+        #sys.argv.append("Description")
+        #sys.argv.append("-f")
+        #sys.argv.append("markdown")
         #sys.argv.append("-o")
         #sys.argv.append("/home/nauer/test.pdf")
-        #sys.argv.append("-k")
-        #sys.argv.append("--set")
+        # sys.argv.append("-k")
+
+       # sys.argv.append("--set")
         #sys.argv.append('../test/test.json')
 
         # sys.argv.append("-h")
