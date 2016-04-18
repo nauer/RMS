@@ -32,14 +32,32 @@ from markdown import markdown
 from argparse import FileType
 
 __all__ = []
-__version__ = '0.3'
+__version__ = '0.4'
 __date__ = '2016-04-11'
-__updated__ = '2016-04-15'
+__updated__ = '2016-04-18'
 
 DEBUG = 0
 TESTRUN = 0
 PROFILE = 0
 
+program_name = os.path.basename(sys.argv[0])
+program_version = "v{}".format(__version__)
+program_build_date = str(__updated__)
+program_version_message = '{} {} ({})'.format(os.path.basename(__file__), program_version, program_build_date)
+program_shortdesc = __import__('__main__').__doc__.split("\n")[1]
+program_license = '''{}
+
+  Created by Norbert Auer on {}.
+  Copyright 2016 Acib GmbH. All rights reserved.
+
+  Licensed under the Apache License 2.0
+  http://www.apache.org/licenses/LICENSE-2.0
+
+  Distributed on an "AS IS" basis without warranties
+  or conditions of any kind, either express or implied.
+
+USAGE
+'''.format(program_shortdesc, str(__date__))
 
 class Format(Enum):
     markdown = 1
@@ -84,24 +102,7 @@ def main(argv=None): # IGNORE:C0111
     else:
         sys.argv.extend(argv)
 
-    program_name = os.path.basename(sys.argv[0])
-    program_version = "v%s" % __version__
-    program_build_date = str(__updated__)
-    program_version_message = '%%(prog)s %s (%s)' % (program_version, program_build_date)
-    program_shortdesc = __import__('__main__').__doc__.split("\n")[1]
-    program_license = '''%s
 
-  Created by Norbert Auer on %s.
-  Copyright 2016 Acib GmbH. All rights reserved.
-
-  Licensed under the Apache License 2.0
-  http://www.apache.org/licenses/LICENSE-2.0
-
-  Distributed on an "AS IS" basis without warranties
-  or conditions of any kind, either express or implied.
-
-USAGE
-''' % (program_shortdesc, str(__date__))
 
     try:
         # Setup argument parser
@@ -119,8 +120,12 @@ USAGE
                                  help='Path to the new repository parent. Default = "$HOME"')
         parser_init.set_defaults(func=init)
 
+        parser.add_argument('-V', '--version', action='version', version=program_version_message)
+        parser.set_defaults(func=empty)
+
         parser_add.add_argument('file', type=str, help='Add file to the repository')
         parser_add.add_argument('description', type=str, help='File description')
+        parser_add.add_argument('-n', '--no-tag', action='store_true', help='Do not add a tasg if already in repository')
         parser_add.set_defaults(func=add)
 
         parser_rm.add_argument('file', type=str, help='Remove tag from the repository. If the last tag of a file was removed also the file itself with its description file will be removed.')
@@ -148,7 +153,7 @@ USAGE
 
         # Process arguments
         args = parser.parse_args()
-
+        args.p = parser
         if DEBUG:
             print(args)
 
@@ -349,6 +354,15 @@ def _get_json_by_sha1(sha1):
         raise
 
     return json_data
+
+
+def empty(args):
+    """
+    Print help lines if no arguments
+    :param args: dict
+    :return: None
+    """
+    args.p.print_help()
 
 
 def init(args):
@@ -628,6 +642,8 @@ def desc(args):
 
 if __name__ == "__main__":
     if DEBUG:
+        pass
+        #sys.argv.append("-V")
         # sys.argv.append("init")
 
         #sys.argv.append("add")
@@ -635,8 +651,8 @@ if __name__ == "__main__":
         #sys.argv.append("~/targets.ods")
         #sys.argv.append("This file is a simple test file from the file text. It is only here to test rms functionality.")
 
-        sys.argv.append("rm")
-        sys.argv.append(".bashrc")
+        #sys.argv.append("rm")
+        #sys.argv.append(".bashrc")
 
 
         #sys.argv.append("get")
