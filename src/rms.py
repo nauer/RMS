@@ -32,8 +32,8 @@ from markdown import markdown
 from argparse import FileType
 
 __all__ = []
-__version__ = '0.4'
-__date__ = '2016-04-11'
+__version__ = '0.5'
+__date__ = '2016-06-23'
 __updated__ = '2016-04-18'
 
 DEBUG = 0
@@ -114,6 +114,7 @@ def main(argv=None): # IGNORE:C0111
         parser_get          = subparsers.add_parser('get', help='Get file from repository')
         parser_tag          = subparsers.add_parser('tag', help='Get or set tags')
         parser_desc         = subparsers.add_parser('desc', help='Set and get description')
+        parser_list         = subparsers.add_parser('list', help='Show repository content')
         parser_desc_group   = parser_desc.add_mutually_exclusive_group()
 
         parser_init.add_argument("path",action=EnvDefault, envvar='HOME',
@@ -125,7 +126,7 @@ def main(argv=None): # IGNORE:C0111
 
         parser_add.add_argument('file', type=str, help='Add file to the repository')
         parser_add.add_argument('description', type=str, help='File description')
-        parser_add.add_argument('-n', '--no-tag', action='store_true', help='Do not add a tasg if already in repository')
+        parser_add.add_argument('-n', '--no-tag', action='store_true', help='Do not add a tag if already in repository')
         parser_add.set_defaults(func=add)
 
         parser_rm.add_argument('file', type=str, help='Remove tag from the repository. If the last tag of a file was removed also the file itself with its description file will be removed.')
@@ -151,6 +152,8 @@ def main(argv=None): # IGNORE:C0111
                                        help='Delete all sections from description file')
         parser_desc.set_defaults(func=desc)
 
+        parser_list.set_defaults(func=show)
+
         # Process arguments
         args = parser.parse_args()
         args.p = parser
@@ -168,7 +171,7 @@ def main(argv=None): # IGNORE:C0111
             raise(e)
         indent = len(program_name) * " "
         sys.stderr.write(program_name + ": " + repr(e) + "\n")
-        sys.stderr.write(indent + "  for help use --help")
+        sys.stderr.write(indent + "  for help use --help\n")
         return 2
 
 
@@ -356,6 +359,15 @@ def _get_json_by_sha1(sha1):
     return json_data
 
 
+def _checkRepo():
+    repo = _get_repo_path()
+
+    if repo is None:
+        sys.exit("RMS is not set! Run 'rms init' before to create a rms repository.")
+
+    return repo
+
+
 def empty(args):
     """
     Print help lines if no arguments
@@ -372,17 +384,35 @@ def init(args):
     :return: None
     """
     try:
-        os.makedirs(os.path.join(args.init_path, ".rms", "data"))
-        os.makedirs(os.path.join(args.init_path, ".rms", "tags"))
-        os.makedirs(os.path.join(args.init_path, ".rms", "desc"))
-        print("Create new repository at {}".format(os.path.join(args.init_path,".rms")))
-        print("Add this RMS={} to your .profile file".format(os.path.join(args.init_path, ".rms")))
+        os.makedirs(os.path.join(args.path, ".rms", "data"))
+        os.makedirs(os.path.join(args.path, ".rms", "tags"))
+        os.makedirs(os.path.join(args.path, ".rms", "desc"))
+        print("Create new repository at {}".format(os.path.join(args.path,".rms")))
+        print("Add this RMS={} to your .profile file".format(os.path.join(args.path, ".rms")))
     except FileExistsError:
-        print("Repository {} already exists".format(os.path.join(args.init_path, ".rms")), file=sys.stderr)
-        print("Add this RMS={} to your .profile file".format(os.path.join(args.init_path, ".rms")), file=sys.stderr)
+        print("Repository {} already exists".format(os.path.join(args.path, ".rms")), file=sys.stderr)
+        print("Add this RMS={} to your .profile file".format(os.path.join(args.path, ".rms")), file=sys.stderr)
     except:
         print("Unexpected error: {}".format(sys.exc_info()[0]), file=sys.stderr)
         raise
+
+def show(args):
+    """
+    Show repository content
+    :param args:
+    :return:
+    """
+    repo = _checkRepo()
+
+    repo_hashes = _get_repo_hashes()
+    #print(repo_hashes)
+    print(_get_tags_inodes())
+    #print(_get_repo_tags())
+
+    inodes = _get_tags_inodes()
+    for key in inodes:
+        for tag in inodes[key]:
+            print(_get_data_tag(tag), tag)
 
 
 def add(args):
@@ -391,11 +421,8 @@ def add(args):
     :param args: dict
     :return: None
     """
-    repo = _get_repo_path()
+    repo = _checkRepo()
     args.file = os.path.expanduser(args.file)
-
-    if repo is None:
-        sys.exit("RMS is not set! Run 'rms init' before to create a rms repository.")
 
     try:
         mime = magic.from_file(args.file, mime=True)
@@ -464,7 +491,7 @@ def rm(args):
     :param args: dict
     :return: None
     """
-    repo = _get_repo_path()
+    repo = _checkRepo()
 
     filename = args.file # No path allowed only filename
 
@@ -504,7 +531,7 @@ def get(args):
     :param args: dict
     :return: None
     """
-    repo = _get_repo_path()
+    repo = _checkRepo()
 
     tags = _get_repo_tags()
 
@@ -537,7 +564,7 @@ def tag(args):
     :param args: dict
     :return: None
     """
-    repo = _get_repo_path()
+    repo = _checkRepo()
 
     tags = _get_repo_tags()
 
@@ -575,7 +602,7 @@ def desc(args):
     :param args: dict
     :return: None
     """
-    repo = _get_repo_path()
+    repo = _checkRepo()
 
     filename = os.path.basename(args.file)
 
